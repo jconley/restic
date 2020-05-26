@@ -813,9 +813,12 @@ func TestArchiverSaveDir(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			ft, err := arch.SaveDir(ctx, "/", fi, test.target, nil)
+			ft, excluded, err := arch.SaveDir(ctx, "/", fi, test.target, nil)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if excluded {
+				t.Errorf("expected !excluded")
 			}
 
 			ft.Wait(ctx)
@@ -895,9 +898,12 @@ func TestArchiverSaveDirIncremental(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		ft, err := arch.SaveDir(ctx, "/", fi, tempdir, nil)
+		ft, excluded, err := arch.SaveDir(ctx, "/", fi, tempdir, nil)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if excluded {
+			t.Errorf("expected !excluded")
 		}
 
 		ft.Wait(ctx)

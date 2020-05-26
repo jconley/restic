@@ -95,6 +95,7 @@ type BackupOptions struct {
 	TimeStamp           string
 	WithAtime           bool
 	IgnoreInode         bool
+	ModifiedAfter       string
 }
 
 var backupOptions BackupOptions
@@ -123,6 +124,7 @@ func init() {
 	f.StringVar(&backupOptions.TimeStamp, "time", "", "`time` of the backup (ex. '2012-11-01 22:08:41') (default: now)")
 	f.BoolVar(&backupOptions.WithAtime, "with-atime", false, "store the atime for all files and directories")
 	f.BoolVar(&backupOptions.IgnoreInode, "ignore-inode", false, "ignore inode number changes when checking for modified files")
+	f.StringVar(&backupOptions.ModifiedAfter, "modified-after", "", "only backup files modified after a given `time` (ex. '2012-11-01 22:08:41')")
 }
 
 // filterExisting returns a slice of all existing items, or an error if no
@@ -263,7 +265,7 @@ func collectRejectByNameFuncs(opts BackupOptions, repo *repository.Repository, t
 
 // collectRejectFuncs returns a list of all functions which may reject data
 // from being saved in a snapshot based on path and file info
-func collectRejectFuncs(opts BackupOptions, repo *repository.Repository, targets []string) (fs []RejectFunc, err error) {
+func collectRejectFuncs(opts BackupOptions, repo *repository.Repository, targets []string, modifiedAfter *time.Time) (fs []RejectFunc, err error) {
 	// allowed devices
 	if opts.ExcludeOtherFS && !opts.Stdin {
 		f, err := rejectByDevice(targets)
@@ -272,7 +274,9 @@ func collectRejectFuncs(opts BackupOptions, repo *repository.Repository, targets
 		}
 		fs = append(fs, f)
 	}
-
+	if modifiedAfter != nil {
+		fs = append(fs, rejectUnlessModifiedAfter(*modifiedAfter))
+	}
 	return fs, nil
 }
 
@@ -412,6 +416,14 @@ func runBackup(opts BackupOptions, gopts GlobalOptions, term *termstatus.Termina
 		}
 	}
 
+	var modifiedAfter time.Time
+	if opts.ModifiedAfter != "" {
+		modifiedAfter, err = time.ParseInLocation(TimeFormat, opts.ModifiedAfter, time.Local)
+		if err != nil {
+			return errors.Fatalf("error in modified-after option: %v\n", err)
+		}
+	}
+
 	var t tomb.Tomb
 
 	if gopts.verbosity >= 2 && !gopts.JSON {
@@ -487,7 +499,7 @@ func runBackup(opts BackupOptions, gopts GlobalOptions, term *termstatus.Termina
 	}
 
 	// rejectFuncs collect functions that can reject items from the backup based on path and file info
-	rejectFuncs, err := collectRejectFuncs(opts, repo, targets)
+	rejectFuncs, err := collectRejectFuncs(opts, repo, targets, &modifiedAfter)
 	if err != nil {
 		return err
 	}
@@ -562,6 +574,7 @@ func runBackup(opts BackupOptions, gopts GlobalOptions, term *termstatus.Termina
 	arch.StartFile = p.StartFile
 	arch.CompleteBlob = p.CompleteBlob
 	arch.IgnoreInode = opts.IgnoreInode
+	arch.ExcludeEmptyDirs = (&modifiedAfter != nil)
 
 	if parentSnapshotID == nil {
 		parentSnapshotID = &restic.ID{}

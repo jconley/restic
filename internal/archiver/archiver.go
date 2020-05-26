@@ -78,8 +78,9 @@ type Archiver struct {
 	// WithAtime configures if the access time for files and directories should
 	// be saved. Enabling it may result in much metadata, so it's off by
 	// default.
-	WithAtime   bool
-	IgnoreInode bool
+	WithAtime        bool
+	IgnoreInode      bool
+	ExcludeEmptyDirs bool
 }
 
 // Options is used to configure the archiver.
@@ -135,6 +136,7 @@ func New(repo restic.Repository, fs fs.FS, opts Options) *Archiver {
 		StartFile:    func(string) {},
 		CompleteBlob: func(string, uint64) {},
 		IgnoreInode:  false,
+		ExcludeEmptyDirs: false,
 	}
 
 	return arch
@@ -208,17 +210,17 @@ func (arch *Archiver) loadSubtree(ctx context.Context, node *restic.Node) *resti
 
 // SaveDir stores a directory in the repo and returns the node. snPath is the
 // path within the current snapshot.
-func (arch *Archiver) SaveDir(ctx context.Context, snPath string, fi os.FileInfo, dir string, previous *restic.Tree) (d FutureTree, err error) {
+func (arch *Archiver) SaveDir(ctx context.Context, snPath string, fi os.FileInfo, dir string, previous *restic.Tree) (d FutureTree, excluded bool, err error) {
 	debug.Log("%v %v", snPath, dir)
 
 	treeNode, err := arch.nodeFromFileInfo(dir, fi)
 	if err != nil {
-		return FutureTree{}, err
+		return FutureTree{}, false, err
 	}
 
 	names, err := readdirnames(arch.FS, dir, fs.O_NOFOLLOW)
 	if err != nil {
-		return FutureTree{}, err
+		return FutureTree{}, false, err
 	}
 	sort.Strings(names)
 
@@ -228,7 +230,7 @@ func (arch *Archiver) SaveDir(ctx context.Context, snPath string, fi os.FileInfo
 		// test if context has been cancelled
 		if ctx.Err() != nil {
 			debug.Log("context has been cancelled, aborting")
-			return FutureTree{}, ctx.Err()
+			return FutureTree{}, false, ctx.Err()
 		}
 
 		pathname := arch.FS.Join(dir, name)
@@ -244,7 +246,7 @@ func (arch *Archiver) SaveDir(ctx context.Context, snPath string, fi os.FileInfo
 				continue
 			}
 
-			return FutureTree{}, err
+			return FutureTree{}, false, err
 		}
 
 		if excluded {
@@ -254,9 +256,13 @@ func (arch *Archiver) SaveDir(ctx context.Context, snPath string, fi os.FileInfo
 		nodes = append(nodes, fn)
 	}
 
+	if arch.ExcludeEmptyDirs && len(nodes) == 0 {
+		return FutureTree{}, true, err
+	}
+
 	ft := arch.treeSaver.Save(ctx, snPath, treeNode, nodes)
 
-	return ft, nil
+	return ft, false, nil
 }
 
 // FutureNode holds a reference to a node, FutureFile, or FutureTree.
@@ -419,12 +425,14 @@ func (arch *Archiver) Save(ctx context.Context, snPath, target string, previous 
 		oldSubtree := arch.loadSubtree(ctx, previous)
 
 		fn.isTree = true
-		fn.tree, err = arch.SaveDir(ctx, snPath, fi, target, oldSubtree)
-		if err == nil {
-			arch.CompleteItem(snItem, previous, fn.node, fn.stats, time.Since(start))
-		} else {
+		fn.tree, excluded, err = arch.SaveDir(ctx, snPath, fi, target, oldSubtree)
+		if err != nil {
 			debug.Log("SaveDir for %v returned error: %v", snPath, err)
 			return FutureNode{}, false, err
+		} else if excluded {
+			return FutureNode{}, true, err
+		} else {
+			arch.CompleteItem(snItem, previous, fn.node, fn.stats, time.Since(start))
 		}
 
 	case fi.Mode()&os.ModeSocket > 0:

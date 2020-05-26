@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/restic/restic/internal/debug"
 	"github.com/restic/restic/internal/errors"
@@ -267,6 +268,14 @@ func rejectByDevice(samples []string) (RejectFunc, error) {
 
 		panic(fmt.Sprintf("item %v, device id %v not found, allowedDevs: %v", item, id, allowed))
 	}, nil
+}
+
+// rejectUnlessModifiedAfter returns a RejectFunc that rejects files which
+// have not been modified since a given time
+func rejectUnlessModifiedAfter(t time.Time) RejectFunc {
+	return func(item string, fi os.FileInfo) bool {
+		return !(fi == nil || fi.IsDir() || fi.ModTime().After(t))
+	}
 }
 
 // rejectResticCache returns a RejectByNameFunc that rejects the restic cache
